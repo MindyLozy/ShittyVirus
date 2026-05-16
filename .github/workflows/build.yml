@@ -8,7 +8,7 @@ jobs:
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
       - name: Compile
-        run: cl /EHsc /Fe:locker.exe shitvirus.cpp user32.lib advapi32.lib
+        run: cl /EHsc /Fe:locker.exe shitvirus.cpp user32.lib advapi32.lib shell32.lib
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
